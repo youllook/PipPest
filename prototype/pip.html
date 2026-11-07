@@ -86,6 +86,7 @@ function resize(){
 addEventListener('resize', resize); resize();
 const norm=(x,y)=>{const l=Math.hypot(x,y)||1;return{x:x/l,y:y/l}};
 const lerp=(a,b,t)=>a+(b-a)*t;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 
 /* ================= 狀態 ================= */
 const MODES = [
@@ -225,7 +226,13 @@ function drawPip(r){
   // 頭：比身體晚半拍（延遲跟隨）
   const lagBob = Math.sin(p.phase - .9);
   const tilt = st.mode==='wait' ? Math.sin(t*.4)*.04 : lagBob*.04 + (pose ? -.08 : 0);
-  img(headImg(), 8, r.jacketTop + 18 + lagBob*2.5, HEAD_W, tilt, .5, .8);
+  // 眼神追滑鼠：頭以脖子為軸轉向游標（上下最多約 ±26°），平滑跟上；睡著時不看
+  const neckY = r.jacketTop + 18;
+  const mx = (mouse.x - r.cx)*r.dir/r.s - 8, my = (mouse.y - GY)/r.s - neckY;
+  const want = (st.mode==='away' || pose) ? 0 : clamp(Math.atan2(my, Math.max(30, Math.abs(mx))), -.45, .45);
+  r.p.look = lerp(r.p.look ?? 0, want, .12);
+  const lean = Math.sin(r.p.look)*4;                       // 頭往看的方向探一點
+  img(headImg(), 8 + Math.abs(lean)*.5, neckY + lagBob*2.5 + lean, HEAD_W, tilt + r.p.look, .5, .8);
   ctx.restore();
 
   // 6) 弓與前手臂
@@ -284,7 +291,7 @@ function fire(r, frenzy){
   let T = flightTime(d);
   if(frenzy){ tx += (Math.random()-.5)*40; ty += (Math.random()-.5)*26; T *= .85 + Math.random()*.3; }
   const v = launchVel(P, tx, ty, T);
-  arrows.push({x:P.x, y:P.y, vx:v.vx, vy:v.vy, dist:d, trav:0, frenzy, stuck:0, rot:Math.atan2(v.vy,v.vx), tool:st.tool, home:r.p, back:false, trail:[]});
+  arrows.push({x:P.x, y:P.y, vx:v.vx, vy:v.vy, dist:d, trav:0, frenzy, stuck:0, rot:Math.atan2(v.vy,v.vx), tool:st.tool});
   if(arrows.length>250) arrows.splice(0, arrows.length-250);
 }
 
@@ -343,12 +350,8 @@ function update(dt){
 
   for(let i=arrows.length-1;i>=0;i--){ const a = arrows[i];
     if(a.stuck){ if(--a.stuck<=0) arrows.splice(i,1); continue; }
-    if(a.back){ const P = grip(rig(a.home)), d = norm(P.x-a.x, P.y-a.y);
-      a.x += d.x*16; a.y += d.y*16; a.rot = Math.atan2(-d.y,-d.x);
-      if(Math.hypot(P.x-a.x,P.y-a.y)<18) arrows.splice(i,1); continue; }
     a.x+=a.vx; a.y+=a.vy; a.vy+=GRAV; a.trav+=Math.hypot(a.vx,a.vy); a.rot=Math.atan2(a.vy,a.vx);
     if(hitItem(a)){ arrows.splice(i,1); continue; }
-    if(a.tool==='WebSearch'){ if(a.x<0||a.x>W||a.y<0||a.y>GY) a.back=true; continue; }
     if(a.x<-80||a.x>W+80){ arrows.splice(i,1); continue; }
     if(a.y>=GY){ a.y=GY; a.stuck = a.frenzy ? 70 : 160; continue; }
     if(!a.frenzy && a.trav>=a.dist){ a.stuck = 160; }   // 單發：插在游標當時的位置
