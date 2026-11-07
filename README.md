@@ -1,4 +1,4 @@
-# Pip
+# PipPest
 
 > **一隻會妨礙你工作的桌面寵物。**
 >
@@ -38,6 +38,46 @@ Pip 是一隻站在你工作列上的橡皮水管弓箭手。Claude Code 在幫�
 - 滑鼠會**穿過** Pip 以外的地方，照常點後面的程式；移到 Pip 身上可以摸摸頭，甩滑鼠牠會嚇到閃開。
 - 右下角系統匣有 Pip 圖示：顯示／隱藏、結束。結束是最常用的功能。
 
+## 快速安裝（Windows 10/11）
+
+**1. 下載 Pip**
+
+到 [Releases](https://github.com/youllook/PipPest/releases/latest) 下載 `PipPest-windows-x64.zip`，解壓後執行 `pip-pet.exe`。Pip 會出現在主螢幕右下角。
+
+> 第一次執行時，Windows 會跳出藍色的 SmartScreen 警告（執行檔沒有簽章）。按「其他資訊」→「仍要執行」。
+> Windows 也覺得你不該裝它。
+
+**2. 裝 Mod，讓 Pip 跟著 Claude 動**（需要 Claude Code v2.1.287 以上）
+
+```bash
+claude plugin marketplace add youllook/ClaudeMods
+claude plugin install pip-bridge@claude-mods
+```
+
+完成。下一次 Claude 開始工作，你就會開始躲箭。
+
+**移除**：系統匣 Pip 圖示右鍵 →「結束 Pip」，刪掉資料夾；Mod 用 `claude plugin uninstall pip-bridge@claude-mods`。
+
+### 沒裝 Mod 也能手動玩
+
+```bash
+curl "http://127.0.0.1:38917/state?mode=exec&tool=Bash"
+```
+
+參數：`mode`＝`away|idle|think|exec|wait|ok|err`，`tool`＝`Bash|Edit|Read|WebSearch`，`arrows`＝0–20，`stamina`＝0.1–1，`sub`＝`+|-`。
+
+## 想自己改
+
+需要 [Rust](https://rustup.rs/)、Node.js。
+
+```bash
+cd pet
+npm install
+npm run build         # 會先把 prototype/pip.html 和 assets 複製進 dist/，再編 release 版
+```
+
+產出在 `pet/src-tauri/target/release/pip-pet.exe`。動畫和互動都在 `prototype/pip.html`，改完重新 build 即可。
+
 ## 架構
 
 ```
@@ -50,34 +90,6 @@ Claude Code ──(Mod: pip-bridge)──▶ http://127.0.0.1:38917/state ──
 | Pip 本身 | 單檔 HTML + Canvas，零框架：貼圖零件＋程式畫的橡皮水管手腳、節拍彈跳、彈道射擊、Verlet 擺盪 | `prototype/pip.html` |
 | 接上 Claude | Claude Code Mod **pip-bridge**（在 [ClaudeMods](https://github.com/youllook/ClaudeMods/tree/main/plugins/pip-bridge)） | 另一個 repo |
 | 素材 | 角色圖用 AI 生成，Python（numpy + Pillow）去背切零件 | `assets/`、`tools/`、`prompts/` |
-
-## 安裝與執行（Windows）
-
-需要 [Rust](https://rustup.rs/)、Node.js、WebView2（Windows 10/11 內建）。
-
-```bash
-cd pet
-npm install
-npm run sync          # 把 prototype/pip.html 和 assets 複製進 dist/
-npm run build         # 產出 release 執行檔
-```
-
-執行 `pet/src-tauri/target/release/pip-pet.exe`，Pip 會出現在主螢幕右下角。
-
-接著裝 Mod，讓 Pip 跟著 Claude 動：
-
-```bash
-claude plugin marketplace add youllook/ClaudeMods
-claude plugin install pip-bridge@claude-mods
-```
-
-沒裝 Mod 也能手動玩：
-
-```bash
-curl "http://127.0.0.1:38917/state?mode=exec&tool=Bash"
-```
-
-參數：`mode`＝`away|idle|think|exec|wait|ok|err`，`tool`＝`Bash|Edit|Read|WebSearch`，`arrows`＝0–20，`stamina`＝0.1–1，`sub`＝`+|-`。
 
 ## 只想看動畫
 
