@@ -1,0 +1,25 @@
+【第 1 次提交】角色總表（文字直接貼上）
+────────────────────────────────
+Create one large, clean character design sheet for an original cartoon character named "Pip", a small round bean-shaped archer that fuses 1930s rubber hose animation with modern streetwear.
+
+CHARACTER
+- Rubber hose DNA: big head and tiny body, pie-cut eyes (black ovals with a wedge cut out), cheeky wide grin, thin noodle-like black arms and legs with no elbows or knees, white four-finger cartoon gloves.
+- Outfit: oversized boxy cropped puffer jacket, black bucket hat pulled low, one small hoop earring, baggy cargo shorts, huge chunky dad sneakers with thick soles, a crossbody sling bag used as a quiver with arrows poking out, a tiny arrow logo patch on the chest.
+- Palette: cream white, ink black, warm grey, plus ONE acid lime green accent (#C6FF00) used ONLY on the sneaker soles, the arrow fletching and the chest logo.
+
+LAYOUT (four labeled-free sections, generous spacing, nothing overlapping)
+1. Top row: full-body turnaround — front, 3/4 front, side profile facing right, back. Relaxed cool standing pose.
+2. Second row: 8 head-only expressions facing right, same size — chill smirk, focused one eye squinting while aiming, asleep with eyes closed, big hype laugh, startled with sweat drops, bored half-lidded, dizzy spiral eyes, locked-in gritted teeth.
+3. Third row: separated parts for animation — head facing right, torso only with NO arms and NO legs, the bucket hat alone, the sling-bag quiver alone, 4 white glove hands (open palm, fist, gripping a bow handle, pinching a bowstring), one sneaker side view, a modern recurve bow without string in the lime accent, one arrow pointing right.
+4. Bottom row: props in the same style with pie-cut eyes — a smirking red apple, a nervous round balloon, a mischievous small bug with noodle legs wearing a tiny backwards cap; the apple and the bug again each pierced by an arrow with dizzy spiral eyes; a popped balloon as rubber shreds and a smoke puff.
+
+STYLE
+2D hand-inked cel animation, thick clean black outlines, flat colors, no gradients, no 3D, no realism, subtle vintage print grain. Plain flat cream background (#F4ECD8). No text, no labels, no ground shadows.
+
+
+【第 2 次提交】去背用乾淨零件（附上第 1 次的圖一起貼）
+────────────────────────────────
+Use the attached sheet as the exact reference for Pip: same outfit, same palette, same proportions.
+Redraw ONLY the animation parts on a plain solid chroma green background (#00FF00), larger and with generous spacing, nothing overlapping:
+head facing right, head facing front, torso only with NO arms and NO legs, bucket hat alone, sling-bag quiver with 3 arrows, 4 white glove hands (open palm, fist, gripping a bow handle, pinching a bowstring), one sneaker side view facing right, recurve bow without string, one arrow pointing right.
+2D hand-inked cel animation, thick black outlines, flat colors, no shadows, no text.

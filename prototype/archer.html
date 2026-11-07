@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Archer Pet 原型</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#24323f;font-family:system-ui,"Microsoft JhengHei",sans-serif}
+  #desk{position:fixed;inset:0;background:radial-gradient(ellipse at 30% 20%,#4a6585,#1d2833 70%)}
+  canvas{position:fixed;left:0;top:0;image-rendering:pixelated;pointer-events:none}
+  #hud{position:fixed;left:12px;top:12px;z-index:2;background:rgba(12,17,24,.88);color:#e8eef5;
+       padding:10px 12px;border-radius:8px;font-size:13px;width:320px;line-height:1.5}
+  #hud h1{font-size:14px;margin:0 0 6px}
+  #hud .row{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0}
+  #hud button{background:#2d3d4f;color:#e8eef5;border:1px solid #47607a;border-radius:4px;padding:3px 7px;font-size:12px;cursor:pointer}
+  #hud button.on{background:#3d7a4a;border-color:#6fbf7f}
+  #hud label{display:flex;align-items:center;gap:6px;font-size:12px}
+  #hud input[type=range]{flex:1}
+  #log{font-family:Consolas,monospace;font-size:11px;color:#9fb6cc;min-height:16px}
+  #pt{font-family:Consolas,monospace;font-size:11px}
+  .dim{color:#8899aa;font-size:11px}
+</style>
+</head>
+<body>
+<div id="desk"></div>
+<canvas id="c"></canvas>
+<div id="hud">
+  <h1>🏹 Archer Pet 原型（模擬 Mod 事件）</h1>
+  <div class="row" id="modes"></div>
+  <div class="row">
+    <label>工具 <select id="tool">
+      <option>Bash</option><option>Edit</option><option>Read</option><option>WebSearch</option>
+    </select></label>
+    <button id="sub">子代理 +1</button><button id="subEnd">子代理結束</button>
+  </div>
+  <label>箭袋＝context 剩餘 <input type="range" id="ctx" min="0" max="20" value="20"><span id="ctxv">20</span></label>
+  <label>體力＝額度剩餘 <input type="range" id="sta" min="10" max="100" value="100"><span id="stav">100%</span></label>
+  <div class="row"><button id="compact">壓縮 context（補箭）</button>
+    <label><input type="checkbox" id="hangOn" checked> 游標掛物品</label>
+    <span id="score">擊落 0</span></div>
+  <div id="log">—</div>
+  <div id="pt">穿透：是</div>
+  <div class="dim">鍵盤 1–7 切狀態。滑鼠快甩會閃避；待命時游標停 5 秒牠會射你；點牠會開心。</div>
+</div>
+<script>
+const S = 4;                       // 一個像素 = 4 螢幕 px
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let W, H, GY;                      // 低解析畫布尺寸、地面（工作列頂）
+function resize(){
+  W = Math.ceil(innerWidth / S); H = Math.ceil(innerHeight / S);
+  cv.width = W; cv.height = H; cv.style.width = W*S+'px'; cv.style.height = H*S+'px';
+  GY = H - 10;
+}
+addEventListener('resize', resize); resize();
+
+/* ---------- 像素工具 ---------- */
+function px(x,y,c){ ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), 1, 1); }
+function line(x0,y0,x1,y1,c){
+  x0=Math.round(x0);y0=Math.round(y0);x1=Math.round(x1);y1=Math.round(y1);
+  let dx=Math.abs(x1-x0),sx=x0<x1?1:-1,dy=-Math.abs(y1-y0),sy=y0<y1?1:-1,e=dx+dy;
+  for(let i=0;i<2000;i++){ px(x0,y0,c); if(x0===x1&&y0===y1)break;
+    const e2=2*e; if(e2>=dy){e+=dy;x0+=sx} if(e2<=dx){e+=dx;y0+=sy} }
+}
+const norm=(x,y)=>{const l=Math.hypot(x,y)||1;return{x:x/l,y:y/l}};
+
+/* ---------- 角色 sprite（16x24，面向右） ---------- */
+const PAL = {K:'#1b1b2a',H:'#3f8f46',h:'#2a6330',S:'#f1c27d',W:'#ffffff',E:'#111111',
+             T:'#4f7d3a',B:'#5d4037',P:'#3e2f2a',D:'#6b4a2e',Q:'#7a5230'};
+const BODY = [
+"......KKKK......",
+".....KHHHHK.....",
+"....KHHHHHHK....",
+"...KHHHHHHHHK...",
+"...KHhSSSSShK...",
+"...KhSSSWESSK...",
+"...KhSSSSSSSK...",
+"....KSSSSSSK....",
+".....KKSSKK.....",
+"....KTTTTTTK....",
+"...KTTTTTTTTK...",
+"..QKTTTTTTTTK...",
+"..QKTTTTTTTTK...",
+"..QKTTTTTTTTK...",
+"..QKBBBBBBBBK...",
+"...KTTTTTTTTK...",
+"...KTTTTTTTTK...",
+"....KPPKKPPK....",
+"....KPPK.KPPK...",
+"....KPPK.KPPK...",
+"....KPPK.KPPK...",
+"...KKKKK.KKKKK..",
+"...KDDDK.KDDDK..",
+"...KKKKK.KKKKK.."];
+
+const GLYPH = {
+  z:["111","001","010","100","111"],
+  '!':["1","1","1","0","1"],
+  '?':["111","001","011","000","010"],
+  ok:["00001","00010","10100","01000"],
+  heart:["01010","11111","01110","00100"]
+};
+function glyph(name,x,y,c){ GLYPH[name].forEach((r,j)=>[...r].forEach((b,i)=>{ if(b==='1') px(x+i,y+j,c); })); }
+
+/* ---------- 狀態 ---------- */
+const MODES = [
+  ['away','不在','session.end'],
+  ['idle','待命','session.start'],
+  ['think','思考','turn.start'],
+  ['exec','執行','tool.call'],
+  ['wait','等你','AskUserQuestion'],
+  ['ok','完成','turn.complete ✓'],
+  ['err','出錯','turn.complete ✗']];
+const st = {mode:'idle', t:0, arrows:20, stamina:1, tool:'Bash', dodge:0, bounce:0};
+const archers = [{dx:0, draw:0}];
+const arrows = [], parts = [];
+const mouse = {x:W/2, y:H/2, lastMove:performance.now(), rx:0, ry:0, rt:0};
+let hovering = false;
+
+/* ---------- 游標掛的物品（無限補貨） ---------- */
+const ITEM_PAL = {g:'#3fae49', r:'#e53935', b:'#42a5f5', w:'#ffffff', k:'#222222', v:'#8e44ad', y:'#ffd54f'};
+const ITEMS = {
+  apple:  {pop:false, px:["..g..",".rrr.","rrwrr","rrrrr",".rrr."]},
+  balloon:{pop:true,  px:[".bbb.","bwbbb","bbbbb",".bbb.","..b.."]},
+  bug:    {pop:false, px:["k...k",".kkk.","kvvvk",".vyv.","k.k.k"]},
+};
+const STRING_LEN = 12;
+let item = null, itemCooldown = 0, score = 0;
+const fallen = [];                       // 被射下來、掉在地上的物品
+function spawnItem(){
+  const keys = Object.keys(ITEMS), type = keys[Math.random()*keys.length|0];
+  item = {type, x:mouse.x, y:mouse.y, ox:mouse.x, oy:mouse.y, len:0};
+}
+function hangOn(){ return document.getElementById('hangOn').checked; }
+// 瞄準目標：有物品就瞄物品，沒有就瞄游標
+function tgt(){ return (item && hangOn()) ? {x:item.x, y:item.y} : {x:mouse.x, y:mouse.y}; }
+function drawItemSprite(type, x, y){
+  ITEMS[type].px.forEach((row,j)=>[...row].forEach((ch,i)=>{ if(ch!=='.') px(x-2+i, y-2+j, ITEM_PAL[ch]); }));
+}
+function updateItem(){
+  if(!hangOn()){ item = null; return; }
+  if(!item){ if(--itemCooldown<=0) spawnItem(); return; }
+  // Verlet 擺盪：繩子一端在游標，物品受重力、被繩長約束
+  if(item.len < STRING_LEN) item.len += .4;           // 新物品從游標慢慢垂下來
+  const vx = (item.x-item.ox)*.985, vy = (item.y-item.oy)*.985;
+  item.ox = item.x; item.oy = item.y;
+  item.x += vx; item.y += vy + .06;
+  const dx = item.x-mouse.x, dy = item.y-mouse.y, d = Math.hypot(dx,dy) || 1;
+  if(d > item.len){ item.x = mouse.x + dx/d*item.len; item.y = mouse.y + dy/d*item.len; }
+}
+function hitItem(r){
+  if(!item || !hangOn()) return false;
+  if(Math.hypot(r.x-item.x, r.y-item.y) > 3) return false;
+  score++; document.getElementById('score').textContent = '擊落 ' + score;
+  const def = ITEMS[item.type];
+  if(def.pop){                                         // 氣球：爆掉、碎片噴出
+    for(let k=0;k<10;k++) parts.push({x:item.x, y:item.y, vx:(Math.random()-.5)*1.6, vy:(Math.random()-.8)*1.4, life:40, c:k%3?'#42a5f5':'#ffffff'});
+  } else {                                             // 蘋果、蟲：被箭帶著拋物線掉下來
+    fallen.push({type:item.type, x:item.x, y:item.y, vx:r.vx*.45, vy:r.vy*.45-.6, dir:r.dir, life:240, bounced:false});
+  }
+  log(`命中 ${item.type}！擊落 ${score}`);
+  item = null; itemCooldown = 25;                      // 一會兒後補一個新的
+  return true;
+}
+function updateFallen(){
+  for(let i=fallen.length-1;i>=0;i--){ const f = fallen[i];
+    if(f.y < GY-3){ f.x += f.vx; f.y += f.vy; f.vy += .06; }
+    else if(!f.bounced && f.vy > .8){ f.y = GY-3; f.vy = -f.vy*.35; f.vx *= .5; f.bounced = true; }
+    else { f.y = GY-3; f.vx = 0; f.vy = 0; }
+    if(--f.life<=0) fallen.splice(i,1);
+  }
+}
+
+function setMode(m){
+  st.mode = m; st.t = 0; archers.forEach(a=>a.draw=0);
+  const d = MODES.find(x=>x[0]===m);
+  log(`Mod 事件 ${d[2]} → ${d[1]}`);
+  document.querySelectorAll('#modes button').forEach(b=>b.classList.toggle('on', b.dataset.m===m));
+  if(m==='err'){ const a=archerGeo(archers[0]);
+    for(let i=0;i<2;i++) parts.push({x:a.G.x,y:a.G.y,vx:(i?.4:-.3),vy:-1,life:70,c:'#a0703c'}); }
+}
+function log(s){ document.getElementById('log').textContent = s; }
+
+/* ---------- 幾何 ---------- */
+function archerGeo(a){
+  const baseX = W - 30 - a.dx;
+  const crouch = st.dodge>0 ? 3 : 0;
+  const hop = st.bounce>0 ? -Math.round(Math.sin(st.bounce/10*Math.PI)*3) : 0;
+  const bx = baseX - 8, by = GY - 24 + crouch + hop;
+  const right = mouse.x >= baseX;
+  const P = {x: bx + (right?9:6), y: by + 11};
+  return {bx, by, right, P, crouch, G:{x:P.x,y:P.y}};
+}
+// 帶拋物線補償的瞄準方向
+const SPEED = 3, GRAV = 0.03;
+function aimAt(P, tx, ty, g=GRAV){
+  const d = Math.hypot(tx-P.x, ty-P.y), T = d / SPEED;
+  return norm(tx-P.x, ty-P.y - 0.5*g*T*T);
+}
+const FRENZY_GRAV = 0.05;
+// 依「飛行時間」反解初速：保證弧線剛好經過目標，距離越遠拋得越高
+function flightTime(d){ return Math.max(28, Math.min(95, d*.55)); }
+function launchVel(P, tx, ty, T, g){
+  return {vx:(tx-P.x)/T, vy:(ty-P.y-0.5*g*T*T)/T};
+}
+
+/* ---------- 發射 ---------- */
+function fire(a, geo, frenzy){
+  if(st.tool==='Read') return;
+  if(!frenzy){   // 瘋狂連射不扣箭袋（箭袋只當 context 指示）
+    if(st.arrows<=0){ parts.push({x:geo.bx+7,y:geo.by-8,vx:0,vy:-.2,life:50,g:'!',c:'#ff5252'}); log('箭袋空了 → 該壓縮 context 了'); return; }
+    st.arrows--; syncCtx();
+  }
+  const tg = tgt();
+  let u = aimAt(geo.G, tg.x, tg.y);
+  let vx = u.x*SPEED, vy = u.y*SPEED, dist = Math.hypot(tg.x-geo.G.x, tg.y-geo.G.y);
+  if(frenzy){    // 散射：目標點與飛行時間帶亂數，但每支都是乾淨的拋物線
+    const tx = tg.x + (Math.random()-.5)*16, ty = tg.y + (Math.random()-.5)*10;
+    const T = flightTime(dist) * (.8 + Math.random()*.4);
+    ({vx, vy} = launchVel(geo.G, tx, ty, T, FRENZY_GRAV));
+    u = norm(vx, vy);
+  }
+  arrows.push({x:geo.G.x, y:geo.G.y, vx, vy, dist, trav:0,
+               type:st.tool, stuck:0, dir:u, back:false, home:a, trail:[], frenzy,
+               g: frenzy ? FRENZY_GRAV : GRAV});
+  if(arrows.length>400) arrows.splice(0, arrows.length-400);
+}
+
+/* ---------- 更新 ---------- */
+function update(){
+  st.t++;
+  if(st.dodge>0) st.dodge--;
+  if(st.bounce>0) st.bounce--;
+  const now = performance.now();
+
+  archers.forEach((a,i)=>{
+    const geo = archerGeo(a);
+    if(st.mode==='think') a.draw = Math.min(.85, a.draw + .006*st.stamina);
+    if(st.mode==='exec' && st.tool!=='Read'){
+      a.draw += .3*st.stamina + i*.02;          // 約每 3–4 幀一箭
+      if(a.draw>=1){ fire(a,geo,true); a.draw=.2+Math.random()*.3; }
+    }
+    if(st.mode==='wait') a.draw = 1;
+  });
+
+  if(st.mode==='away' && st.t%70===0){ const g=archerGeo(archers[0]);
+    parts.push({x:g.bx+(g.right?12:2), y:g.by-2, vx:.15, vy:-.25, life:80, g:'z', c:'#cfe3ff'}); }
+
+  // 待命時游標太久沒動 → 無聊射你一箭
+  if(st.mode==='idle' && now-mouse.lastMove>5000 && !hovering){
+    const a=archers[0], g=archerGeo(a); fire(a,g); mouse.lastMove=now; log('待太久了，咻——');
+  }
+  if((st.mode==='ok'||st.mode==='err') && st.t>150) setMode('idle');
+
+  for(let i=arrows.length-1;i>=0;i--){
+    const r = arrows[i];
+    if(r.stuck){ if(--r.stuck<=0) arrows.splice(i,1); continue; }
+    if(r.back){ // WebSearch：繩子把箭拉回來
+      const g = archerGeo(r.home), d = norm(g.G.x-r.x, g.G.y-r.y);
+      r.x += d.x*4; r.y += d.y*4; r.dir = {x:-d.x,y:-d.y};
+      if(Math.hypot(g.G.x-r.x,g.G.y-r.y)<4){ arrows.splice(i,1); st.arrows=Math.min(20,st.arrows+1); syncCtx(); }
+      continue;
+    }
+    r.x += r.vx; r.y += r.vy; r.vy += r.g; r.trav += Math.hypot(r.vx,r.vy);
+    r.dir = norm(r.vx,r.vy);
+    if(hitItem(r)){ arrows.splice(i,1); continue; }   // 箭跟著物品一起掉下去
+    if(r.type==='Edit' && st.t%2===0) r.trail.push({x:r.x,y:r.y,life:160});
+    if(r.type==='WebSearch'){
+      if(r.x<0||r.x>W||r.y<0||r.y>GY) r.back = true;
+    } else if(r.frenzy){
+      // 連射：穿過游標繼續飛，拋物線落下，插在地上（工作列頂）
+      if(r.x<-10 || r.x>W+10){ arrows.splice(i,1); continue; }
+      if(r.y>=GY){ r.y = GY; r.stuck = 120; }
+    } else if(r.trav>=r.dist || r.y>=GY || r.x<0 || r.x>W){
+      r.stuck = r.frenzy ? 90 : 220;   // 插在游標附近；連射的箭消失得快
+    }
+  }
+  updateItem(); updateFallen();
+  for(let i=parts.length-1;i>=0;i--){ const p=parts[i];
+    p.x+=p.vx; p.y+=p.vy; if(!p.g) p.vy+=.05; if(--p.life<=0) parts.splice(i,1); }
+
+  // 穿透判斷（真實版由 Rust 輪詢游標位置做這件事）
+  hovering = archers.some(a=>{ const g=archerGeo(a);
+    return mouse.x>=g.bx+2 && mouse.x<=g.bx+14 && mouse.y>=g.by && mouse.y<=g.by+24; });
+  document.body.style.cursor = hovering ? 'pointer' : 'default';
+  document.getElementById('pt').textContent = '穿透：' + (hovering ? '否（游標在弓箭手身上，可點）' : '是（點擊會落到底下的視窗）');
+}
+
+/* ---------- 繪製 ---------- */
+function drawBody(geo, sleeping){
+  BODY.forEach((row,r)=>{
+    if(geo.crouch && r>=17 && r<=19) return;   // 蹲下：腿縮短
+    const yy = geo.by + r - (geo.crouch && r>=20 ? 3 : 0);
+    [...row].forEach((ch,c)=>{
+      if(ch==='.') return;
+      let col = PAL[ch];
+      if(sleeping && (ch==='W'||ch==='E')) col = PAL.K;
+      px(geo.bx + (geo.right ? c : 15-c), yy, col);
+    });
+  });
+}
+function drawQuiver(geo){
+  const qx = geo.bx + (geo.right ? 2 : 13), n = Math.ceil(st.arrows/4);
+  for(let i=0;i<n;i++) px(qx, geo.by+10-i, i%2?'#e04848':'#f0d060');
+}
+function drawBow(geo, u, draw, nocked){
+  const n = {x:-u.y, y:u.x};
+  const G = {x:geo.P.x+u.x*6, y:geo.P.y+u.y*6};
+  geo.G = G;
+  const tip = s => ({x:G.x+n.x*7*s-u.x*3, y:G.y+n.y*7*s-u.y*3});
+  const N = {x:G.x-u.x*(2+draw*6), y:G.y-u.y*(2+draw*6)};
+  line(geo.P.x,geo.P.y,G.x,G.y,PAL.S);                 // 前臂
+  line(geo.P.x,geo.P.y,N.x,N.y,'#d9a866');             // 拉弦的手
+  const t1=tip(1), t2=tip(-1);
+  line(t1.x,t1.y,N.x,N.y,'#dddddd'); line(t2.x,t2.y,N.x,N.y,'#dddddd');
+  for(let t=-1;t<=1.001;t+=.04)
+    px(G.x+n.x*7*t-u.x*3*t*t, G.y+n.y*7*t-u.y*3*t*t, '#8d5524');
+  if(nocked){
+    line(N.x,N.y,N.x+u.x*12,N.y+u.y*12,'#a0703c');
+    px(N.x+u.x*13,N.y+u.y*13,'#b8c4cc'); px(N.x+u.x,N.y+u.y,'#e04848');
+  }
+}
+function drawArrow(r){
+  if(r.stuck && r.stuck<60 && (r.stuck>>2)%2) return;  // 快消失時閃爍
+  const d = r.dir;
+  if(r.type==='WebSearch'){ const g=archerGeo(r.home); line(g.G.x,g.G.y,r.x,r.y,'#c9b78a'); }
+  line(r.x-d.x*7, r.y-d.y*7, r.x, r.y, r.type==='Edit' ? '#f2f2f2' : '#a0703c');
+  px(r.x+d.x, r.y+d.y, '#b8c4cc');
+  px(r.x-d.x*7, r.y-d.y*7, r.type==='Edit' ? '#7fb2ff' : '#e04848');
+}
+
+function render(){
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#101820'; ctx.fillRect(0,GY,W,H-GY);       // 假工作列
+  ctx.fillStyle='#1e2a36'; ctx.fillRect(0,GY,W,1);
+
+  // Edit 的墨跡
+  arrows.forEach(r=>r.trail.forEach(p=>{ if(p.life-->0 && (p.life>40 || st.t%2)) px(p.x,p.y,'#2e5fa8'); }));
+
+  archers.forEach((a,i)=>{
+    const geo = archerGeo(a);
+    const sleeping = st.mode==='away';
+    drawBody(geo, sleeping);
+    drawQuiver(geo);
+    if(sleeping) return;
+
+    let u, draw=a.draw, nocked=false;
+    if(st.mode==='idle'){ u = norm(geo.right?.5:-.5, 1); draw=0; }
+    else if(st.mode==='ok'){ u = {x:0,y:-1}; draw=0; }
+    else if(st.mode==='err'){ u = norm(geo.right?.3:-.3, 1); draw=0; }
+    else {
+      const tg = tgt();
+      if(st.mode==='exec' && st.tool!=='Read'){   // 弓的角度＝實際發射方向
+        const d = Math.hypot(tg.x-geo.P.x, tg.y-geo.P.y);
+        const v = launchVel(geo.P, tg.x, tg.y, flightTime(d), FRENZY_GRAV);
+        u = norm(v.vx, v.vy);
+      } else u = aimAt(geo.P, tg.x, tg.y);
+      nocked = st.tool!=='Read' || st.mode!=='exec';
+      if(st.mode==='wait'){ const k=Math.min(st.t/600,1)*.15, j=(Math.random()-.5)*k;
+        const c=Math.cos(j), s=Math.sin(j); u={x:u.x*c-u.y*s, y:u.x*s+u.y*c}; }
+      if(st.arrows<=0) nocked=false;
+    }
+    drawBow(geo, u, draw, nocked);
+
+    if(i===0){
+      const hx = geo.bx+7;
+      if(st.mode==='wait' && (st.t>>4)%2) glyph('!', hx, geo.by-8, '#ffd54f');
+      if(st.mode==='ok') glyph('ok', hx-2, geo.by-7, '#7ee787');
+      if(st.mode==='err') glyph('?', hx-1, geo.by-8, '#ff7b72');
+    }
+    // Read：望遠鏡視線
+    if(st.mode==='exec' && st.tool==='Read'){
+      const d=Math.hypot(mouse.x-geo.P.x, mouse.y-geo.P.y), v=norm(mouse.x-geo.P.x, mouse.y-geo.P.y);
+      for(let k=8;k<d;k+=4) if(((k+st.t)>>2)%2) px(geo.P.x+v.x*k, geo.P.y+v.y*k, '#9be7ff');
+      const rr = 3+Math.sin(st.t/6)*1.5;
+      for(let q=0;q<16;q++) px(mouse.x+Math.cos(q/16*6.283)*rr, mouse.y+Math.sin(q/16*6.283)*rr, '#9be7ff');
+    }
+  });
+
+  arrows.forEach(drawArrow);
+  // 被射下來的物品（插著一支箭）
+  fallen.forEach(f=>{ if(f.life<60 && (f.life>>2)%2) return;
+    drawItemSprite(f.type, f.x, f.y);
+    line(f.x-f.dir.x*5, f.y-f.dir.y*5, f.x+f.dir.x*3, f.y+f.dir.y*3, '#a0703c');
+    px(f.x+f.dir.x*4, f.y+f.dir.y*4, '#b8c4cc'); px(f.x-f.dir.x*5, f.y-f.dir.y*5, '#e04848'); });
+  // 游標上掛的物品與繩子
+  if(item && hangOn()){
+    line(mouse.x, mouse.y, item.x, item.y-2, '#d8d8d8');
+    drawItemSprite(item.type, item.x, item.y);
+  }
+  parts.forEach(p=> p.g ? glyph(p.g, p.x, p.y, p.c) : px(p.x,p.y,p.c));
+}
+
+function loop(){ update(); render(); requestAnimationFrame(loop); }
+
+/* ---------- 輸入 ---------- */
+addEventListener('mousemove', e=>{
+  const now = performance.now();
+  if(mouse.rt){ const sp = Math.hypot(e.clientX-mouse.rx, e.clientY-mouse.ry) / Math.max(1, now-mouse.rt);
+    if(sp>4 && st.mode!=='away' && st.dodge===0){ st.dodge = 40; log('嚇！（游標甩太快，閃避）'); } }
+  mouse.rx=e.clientX; mouse.ry=e.clientY; mouse.rt=now;
+  mouse.x = e.clientX/S; mouse.y = e.clientY/S; mouse.lastMove = now;
+});
+addEventListener('click', e=>{
+  if(e.target.closest('#hud') || !hovering) return;
+  st.bounce = 10; const g = archerGeo(archers[0]);
+  parts.push({x:g.bx+6, y:g.by-7, vx:0, vy:-.2, life:60, g:'heart', c:'#ff6b9a'});
+  log('摸摸頭 ♥');
+});
+addEventListener('keydown', e=>{ const i = +e.key-1; if(MODES[i]) setMode(MODES[i][0]); });
+
+const modesEl = document.getElementById('modes');
+MODES.forEach(([m,label])=>{ const b=document.createElement('button'); b.textContent=label; b.dataset.m=m; b.onclick=()=>setMode(m); modesEl.appendChild(b); });
+document.getElementById('tool').onchange = e=>{ st.tool = e.target.value; };
+const ctxEl = document.getElementById('ctx'), staEl = document.getElementById('sta');
+function syncCtx(){ ctxEl.value = st.arrows; document.getElementById('ctxv').textContent = st.arrows; }
+ctxEl.oninput = ()=>{ st.arrows = +ctxEl.value; syncCtx(); };
+staEl.oninput = ()=>{ st.stamina = staEl.value/100; document.getElementById('stav').textContent = staEl.value+'%'; };
+document.getElementById('compact').onclick = ()=>{ st.arrows = 20; syncCtx(); log('session.compact → 箭袋補滿'); };
+document.getElementById('sub').onclick = ()=>{ if(archers.length<4){ archers.push({dx:22*archers.length, draw:0}); log('agent.spawn → 小弓箭手加入'); } };
+document.getElementById('subEnd').onclick = ()=>{ if(archers.length>1){ archers.pop(); log('子代理完成 → 小弓箭手離開'); } };
+
+setMode('idle');
+loop();
+</script>
+</body>
+</html>

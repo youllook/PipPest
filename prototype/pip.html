@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pip 水管版原型</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,"Microsoft JhengHei",sans-serif}
+  #desk{position:fixed;inset:0;background:radial-gradient(ellipse at 30% 20%,#55708f,#1d2833 70%)}
+  canvas{position:fixed;left:0;top:0;pointer-events:none}
+  #hud{position:fixed;left:12px;top:12px;z-index:2;background:rgba(12,17,24,.88);color:#e8eef5;
+       padding:10px 12px;border-radius:8px;font-size:13px;width:330px;line-height:1.5}
+  #hud h1{font-size:14px;margin:0 0 6px}
+  #hud .row{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0;align-items:center}
+  #hud button{background:#2d3d4f;color:#e8eef5;border:1px solid #47607a;border-radius:4px;padding:3px 7px;font-size:12px;cursor:pointer}
+  #hud button.on{background:#3d7a4a;border-color:#6fbf7f}
+  #hud label{display:flex;align-items:center;gap:6px;font-size:12px}
+  #hud input[type=range]{flex:1}
+  #log{font-family:Consolas,monospace;font-size:11px;color:#9fb6cc;min-height:16px}
+  .dim{color:#8899aa;font-size:11px}
+  /* Tauri 桌面模式：整個視窗透明，只剩 Pip */
+  html.tauri, html.tauri body{background:transparent}
+  html.tauri #desk, html.tauri #hud{display:none}
+  html.tauri.hud #hud{display:block}
+</style>
+</head>
+<body>
+<div id="desk"></div>
+<canvas id="c"></canvas>
+<div id="hud">
+  <h1>🏹 Pip 水管版（模擬 Mod 事件）</h1>
+  <div class="row" id="modes"></div>
+  <div class="row">
+    <label>工具 <select id="tool"><option>Bash</option><option>Edit</option><option>Read</option><option>WebSearch</option></select></label>
+    <button id="sub">子代理 +1</button><button id="subEnd">子代理結束</button>
+  </div>
+  <label>箭袋＝context 剩餘 <input type="range" id="ctx" min="0" max="20" value="20"><span id="ctxv">20</span></label>
+  <label>體力＝額度剩餘 <input type="range" id="sta" min="10" max="100" value="100"><span id="stav">100%</span></label>
+  <div class="row"><button id="compact">壓縮 context（補箭）</button>
+    <label><input type="checkbox" id="hangOn" checked> 游標掛物品</label><span id="score">擊落 0</span></div>
+  <div id="log">載入素材中…</div>
+  <div class="dim">鍵盤 1–7 切狀態。快甩滑鼠會嚇到；待命時游標停住牠會無聊、5 秒後射你；點牠會開心。</div>
+</div>
+<script>
+/* ================= 執行環境 ================= */
+const TAURI = window.__TAURI__ || null;                 // 在 Tauri 視窗裡跑時才有
+if(TAURI) document.documentElement.classList.add('tauri');
+if(TAURI && location.search.includes('hud')) document.documentElement.classList.add('hud');
+
+/* ================= 素材 ================= */
+const A = TAURI ? 'assets/' : '../assets/';
+const SRC = {
+  jacket:'parts/jacket.png', quiver:'parts/quiver.png', shoe:'parts/shoe.png', bow:'parts/bow.png',
+  arrow:'parts/arrow.png', grip:'parts/hand_grip.png', pinch:'parts/hand_pinch.png',
+  open:'parts/hand_open.png', fist:'parts/hand_fist.png',
+  e_chill:'expr/chill.png', e_aim:'expr/aim.png', e_asleep:'expr/asleep.png', e_laugh:'expr/laugh.png',
+  e_startled:'expr/startled.png', e_bored:'expr/bored.png', e_dizzy:'expr/dizzy.png', e_locked:'expr/locked_in.png',
+  apple:'props/apple.png', balloon:'props/balloon.png', bug:'props/bug.png',
+  apple_hit:'props/apple_hit.png', bug_hit:'props/bug_hit.png', pop:'props/balloon_pop.png',
+};
+for(let i=0;i<5;i++) SRC['cel'+i] = `anim/celebrate_0${i}.png`;
+const IMG = {};
+let CEL = null;
+function loadAll(){
+  const jobs = Object.entries(SRC).map(([k,p])=>new Promise((ok,bad)=>{
+    const im = new Image(); im.onload=()=>{IMG[k]=im; ok();}; im.onerror=()=>bad(p); im.src = A+p; }));
+  jobs.push(fetch(A+'anim/celebrate.json').then(r=>r.json()).then(j=>CEL=j));
+  return Promise.all(jobs);
+}
+// 以寬度 w 畫圖（保持比例），(ax,ay) 是圖內錨點比例
+function img(im, x, y, w, rot=0, ax=.5, ay=.5, alpha=1){
+  const h = w * im.height / im.width;
+  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(x,y); ctx.rotate(rot);
+  ctx.drawImage(im, -w*ax, -h*ay, w, h); ctx.restore();
+  return h;
+}
+
+/* ================= 畫布 ================= */
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let W, H, GY, DPR;
+function resize(){
+  DPR = devicePixelRatio || 1; W = innerWidth; H = innerHeight;
+  cv.width = W*DPR; cv.height = H*DPR; cv.style.width = W+'px'; cv.style.height = H+'px';
+  GY = TAURI ? H - 2 : H - 40;                         // 桌面模式：站在工作列上緣
+}
+addEventListener('resize', resize); resize();
+const norm=(x,y)=>{const l=Math.hypot(x,y)||1;return{x:x/l,y:y/l}};
+const lerp=(a,b,t)=>a+(b-a)*t;
+
+/* ================= 狀態 ================= */
+const MODES = [
+  ['away','不在','session.end'], ['idle','待命','session.start'], ['think','思考','turn.start'],
+  ['exec','執行','tool.call'], ['wait','等你','AskUserQuestion'],
+  ['ok','完成','turn.complete ✓'], ['err','出錯','turn.complete ✗']];
+const st = {mode:'idle', t:0, arrows:20, stamina:1, tool:'Bash', dodge:0, poke:0, celT:0};
+const pips = [{off:0, s:1, draw:0, phase:0}];
+const arrows = [], fallen = [], fx = [];
+const mouse = {x:innerWidth/2, y:innerHeight/2, last:performance.now(), rx:0, ry:0, rt:0};
+let hovering = false, score = 0;
+
+function log(s){ document.getElementById('log').textContent = s; }
+function setMode(m){
+  st.mode = m; st.t = 0; st.celT = 0; pips.forEach(p=>p.draw=0);
+  const d = MODES.find(x=>x[0]===m); log(`Mod 事件 ${d[2]} → ${d[1]}`);
+  document.querySelectorAll('#modes button').forEach(b=>b.classList.toggle('on', b.dataset.m===m));
+  if(m==='err'){ const r = rig(pips[0]);
+    for(let i=0;i<2;i++) fx.push({kind:'stick', x:r.wx(r.G.x), y:r.G.y, vx:(i?2:-1.5), vy:-5, rot:0, vr:(i?.3:-.25), life:60}); }
+}
+
+/* ================= 骨架（局部座標：原點＝兩腳中間的地面，面向右） ================= */
+const HEAD_W = 112, JACKET_W = 100, SHOE_W = 64, HAND_W = 40, BOW_L = 150, ARROW_L = 104;
+function target(){ return (item && hangOn()) ? itemCenter() : {x:mouse.x, y:mouse.y}; }
+
+// 計算一隻 Pip 這一幀的姿勢（不畫）
+function rig(p){
+  const s = p.s, cx = W - 110 - p.off;
+  const tg = target();
+  const dir = tg.x >= cx ? 1 : -1;                     // 面向
+  const speed = st.mode==='exec' ? 2.6 : st.mode==='away' ? .45 : 1;
+  const bob = Math.sin(p.phase);                        // 節拍：-1..1
+  let lift = 0;                                         // 跳起高度
+  if(st.dodge>0) lift = Math.sin((1-st.dodge/32)*Math.PI)*34;
+  if(st.poke>0)  lift = Math.max(lift, Math.sin((1-st.poke/24)*Math.PI)*20);
+  const crouch = st.mode==='away' ? 1 : st.dodge>0 ? .6 : 0;
+  const hipY = -68 - bob*4 + crouch*22 - lift;           // 臀部高度（隨節拍上下）；留長一點讓水管腿露出來
+  const jacketBottom = hipY + 2;
+  const jacketTop = jacketBottom - JACKET_W*291/306;
+  const S1 = {x:28, y:jacketTop+34};                    // 前肩（持弓）
+  const S2 = {x:-20, y:jacketTop+34};                   // 後肩（拉弦）
+  // 世界座標 → 局部（面向右）
+  const L = (wx,wy)=>({x:(wx-cx)*dir/s, y:(wy-GY)/s});
+  const lt = L(tg.x, tg.y);
+  return {p, s, cx, dir, bob, lift, crouch, hipY, jacketBottom, jacketTop, S1, S2, lt, speed,
+          wx:(lx)=>cx + lx*dir*s, wy:(ly)=>GY + ly*s, G:{x:0,y:0}};
+}
+
+// 依瞄準方向算持弓點、搭箭點（局部座標）
+function aimPose(r, u, draw){
+  const G = {x:r.S1.x + u.x*58, y:r.S1.y + u.y*58};
+  const N = {x:G.x - u.x*(18 + draw*68), y:G.y - u.y*(18 + draw*68)};   // 拉滿約到臉頰
+  return {G, N, u, draw};
+}
+const GRAV = .35;
+function flightTime(d){ return Math.max(22, Math.min(58, 18 + d*.055)); }
+function launchVel(P, tx, ty, T, g=GRAV){ return {vx:(tx-P.x)/T, vy:(ty-P.y-.5*g*T*T)/T}; }
+
+/* ================= 繪製工具 ================= */
+function hose(x0,y0,x1,y1,bend,w=7){                     // 橡皮水管：一條會彎的粗黑線
+  const mx=(x0+x1)/2, my=(y0+y1)/2, n=norm(-(y1-y0), x1-x0);
+  ctx.beginPath(); ctx.moveTo(x0,y0); ctx.quadraticCurveTo(mx+n.x*bend, my+n.y*bend, x1,y1);
+  ctx.lineWidth=w; ctx.lineCap='round'; ctx.strokeStyle='#141414'; ctx.stroke();
+}
+function headImg(){
+  if(st.poke>0) return IMG.e_laugh;
+  if(st.dodge>0) return IMG.e_startled;
+  switch(st.mode){
+    case 'away': return IMG.e_asleep;
+    case 'think': return IMG.e_aim;
+    case 'exec': return IMG.e_locked;
+    case 'wait': return IMG.e_aim;
+    case 'ok': return IMG.e_laugh;
+    case 'err': return IMG.e_dizzy;
+  }
+  return performance.now()-mouse.last > 2500 ? IMG.e_bored : IMG.e_chill;
+}
+
+function drawPip(r){
+  const p = r.p;
+  // 慶祝：整段換成 Codex 的握拳影格（只播一次）
+  if(st.mode==='ok' && p===pips[0] && CEL && st.celT < CEL.durations.reduce((a,b)=>a+b,0)){
+    let acc=0, f=0; while(f<CEL.frames-1 && st.celT >= acc + CEL.durations[f]){ acc += CEL.durations[f]; f++; }
+    const sc = .62*r.s, im = IMG['cel'+f];
+    ctx.save(); ctx.translate(r.cx, GY); ctx.scale(r.dir*sc, sc);
+    ctx.drawImage(im, -CEL.anchor.x, -CEL.anchor.y); ctx.restore();
+    return;
+  }
+
+  ctx.save(); ctx.translate(r.cx, GY); ctx.scale(r.dir*r.s, r.s);
+  const t = st.t, sq = r.bob*.035;                       // 壓扁拉長量
+
+  // 姿勢
+  let pose = null, u;
+  const aiming = ['think','exec','wait'].includes(st.mode) && !(st.mode==='exec' && st.tool==='Read');
+  if(aiming){
+    if(st.mode==='exec'){ const d=Math.hypot(r.lt.x-r.S1.x, r.lt.y-r.S1.y);
+      const v=launchVel(r.S1, r.lt.x, r.lt.y, flightTime(d*r.s)/1, GRAV/r.s); u=norm(v.vx,v.vy); }
+    else u = norm(r.lt.x-r.S1.x, r.lt.y-r.S1.y);
+    if(st.mode==='wait'){ const k=Math.min(st.t/400,1)*.12, j=(Math.random()-.5)*k, c=Math.cos(j), s=Math.sin(j); u={x:u.x*c-u.y*s, y:u.x*s+u.y*c}; }
+    pose = aimPose(r, u, p.draw);
+  }
+  p.lastPose = pose;
+
+  // 1) 箭袋（背在後面）
+  img(IMG.quiver, -40, r.jacketTop+44, 56, -.35 + r.bob*.03);
+
+  // 2) 腿：水管，跟著節拍彎
+  const hipL = {x:-12, y:r.hipY}, hipR = {x:14, y:r.hipY};
+  const ankL = {x:-20, y:-30 + (r.lift? -r.lift*.2:0)}, ankR = {x:20, y:-30 + (r.lift? -r.lift*.2:0)};
+  const legBend = 6 + r.crouch*16 + Math.max(0,-r.bob)*5;
+  hose(hipL.x,hipL.y, ankL.x, ankL.y - 0, legBend, 8);
+  hose(hipR.x,hipR.y, ankR.x, ankR.y, -legBend, 8);
+
+  // 3) 鞋子（跳起時離地）
+  const footY = -r.lift*.85;
+  img(IMG.shoe, -20, footY - 20, SHOE_W, 0, .5, .5);
+  img(IMG.shoe,  22, footY - 20, SHOE_W, 0, .5, .5);
+
+  // 4) 短褲（程式畫：零件沒有褲子）
+  ctx.save(); ctx.translate(0, r.hipY);
+  ctx.beginPath(); ctx.moveTo(-30,-16); ctx.lineTo(30,-16); ctx.lineTo(33,10); ctx.lineTo(3,12); ctx.lineTo(0,2); ctx.lineTo(-3,12); ctx.lineTo(-33,10); ctx.closePath();
+  ctx.fillStyle='#8b8378'; ctx.fill(); ctx.lineWidth=3; ctx.strokeStyle='#141414'; ctx.stroke();
+  ctx.fillStyle='#6f685f'; ctx.fillRect(-28,-4,12,10); ctx.strokeRect(-28,-4,12,10);
+  ctx.restore();
+
+  // 5) 上半身：外套＋頭，套用壓扁拉長（以臀部為支點）
+  ctx.save(); ctx.translate(0, r.jacketBottom); ctx.scale(1+sq, 1-sq); ctx.translate(0, -r.jacketBottom);
+  img(IMG.jacket, 0, r.jacketBottom, JACKET_W, 0, .5, 1);
+  // 後手臂（待命／不在時垂在身側）
+  if(!pose){
+    const hand = st.mode==='err' ? IMG.open : IMG.fist;
+    const hx = -30 + Math.sin(t*.05)*2, hy = r.jacketBottom + 4;
+    hose(r.S2.x, r.S2.y, hx, hy-10, 8);
+    img(hand, hx, hy, HAND_W*.9, .2);
+  }
+  // 頭：比身體晚半拍（延遲跟隨）
+  const lagBob = Math.sin(p.phase - .9);
+  const tilt = st.mode==='wait' ? Math.sin(t*.4)*.04 : lagBob*.04 + (pose ? -.08 : 0);
+  img(headImg(), 8, r.jacketTop + 18 + lagBob*2.5, HEAD_W, tilt, .5, .8);
+  ctx.restore();
+
+  // 6) 弓與前手臂
+  let bowPose = pose;
+  if(!pose && st.mode!=='away'){                          // 垂著的弓
+    const G = {x:r.S1.x+14, y:r.S1.y + 38};              // 弓斜握在身側，不插進地面
+    bowPose = {G, u:norm(1, -.55 + Math.sin(t*.05)*.04), draw:0, N:null};
+  }
+  if(bowPose){
+    const {G, u} = bowPose;
+    hose(r.S1.x, r.S1.y, G.x, G.y, pose ? -6 : 10);
+    const th = Math.atan2(-u.x, u.y);                     // 弓圖的 +y（握把那側）對準 u
+    const bh = BOW_L * IMG.bow.height / IMG.bow.width;
+    const xa = {x:Math.cos(th), y:Math.sin(th)};
+    const ctr = {x:G.x - u.x*bh*.22, y:G.y - u.y*bh*.22};
+    const tip = sgn => ({x:ctr.x + xa.x*BOW_L*.47*sgn - u.x*bh*.38, y:ctr.y + xa.y*BOW_L*.47*sgn - u.y*bh*.38});
+    const t1 = tip(1), t2 = tip(-1);
+    const N = pose ? pose.N : {x:(t1.x+t2.x)/2, y:(t1.y+t2.y)/2};
+    ctx.lineWidth=1.6; ctx.strokeStyle='#e8e8e8';
+    ctx.beginPath(); ctx.moveTo(t1.x,t1.y); ctx.lineTo(N.x,N.y); ctx.lineTo(t2.x,t2.y); ctx.stroke();
+    img(IMG.bow, ctr.x, ctr.y, BOW_L, th);
+    // 搭箭
+    const nocked = pose && st.arrows>0 && !(st.mode==='exec' && p.draw<.15);
+    if(nocked) img(IMG.arrow, N.x + u.x*ARROW_L*.45, N.y + u.y*ARROW_L*.45, ARROW_L, Math.atan2(u.y,u.x));
+    img(IMG.grip, G.x, G.y, HAND_W, th - Math.PI/2);
+    // 後手拉弦
+    if(pose){
+      hose(r.S2.x, r.S2.y, N.x, N.y, 10);
+      img(IMG.pinch, N.x, N.y, HAND_W, Math.atan2(u.y,u.x) - .3);
+    }
+    r.G = G;
+  }
+  ctx.restore();
+
+  // 頭頂符號
+  const hx = r.cx + 8*r.dir*r.s, hy = GY + (r.jacketTop - 105)*r.s;
+  ctx.save(); ctx.font = `900 ${28*r.s}px "Arial Black",system-ui`; ctx.textAlign='center';
+  ctx.lineWidth = 5; ctx.strokeStyle='#141414';
+  const sym = (txt,col,dy=0)=>{ ctx.fillStyle=col; ctx.strokeText(txt,hx,hy+dy); ctx.fillText(txt,hx,hy+dy); };
+  if(st.mode==='wait' && (t>>4)%2 && p===pips[0]) sym('!','#ffd54f', -Math.abs(Math.sin(t*.2))*6);
+  if(st.mode==='err' && p===pips[0]) sym('?','#ff7b72');
+  ctx.restore();
+}
+
+/* ================= 射箭 ================= */
+function grip(r){ const P = r.p.lastPose; return P ? {x:r.wx(P.G.x), y:r.wy(P.G.y)} : {x:r.cx, y:GY-120*r.s}; }
+function fire(r, frenzy){
+  if(st.tool==='Read') return;
+  if(!frenzy){
+    if(st.arrows<=0){ log('箭袋空了 → 該壓縮 context 了'); return; }
+    st.arrows--; syncCtx();
+  }
+  const P = grip(r), tg = target();
+  let tx = tg.x, ty = tg.y;
+  const d = Math.hypot(tx-P.x, ty-P.y);
+  let T = flightTime(d);
+  if(frenzy){ tx += (Math.random()-.5)*40; ty += (Math.random()-.5)*26; T *= .85 + Math.random()*.3; }
+  const v = launchVel(P, tx, ty, T);
+  arrows.push({x:P.x, y:P.y, vx:v.vx, vy:v.vy, dist:d, trav:0, frenzy, stuck:0, rot:Math.atan2(v.vy,v.vx), tool:st.tool, home:r.p, back:false, trail:[]});
+  if(arrows.length>250) arrows.splice(0, arrows.length-250);
+}
+
+/* ================= 游標掛物品 ================= */
+const ITEM_W = 46, STRING = 58;
+let item = null, itemCd = 0;
+function hangOn(){ return document.getElementById('hangOn').checked; }
+function spawnItem(){
+  const types = ['apple','balloon','bug'], type = types[Math.random()*3|0];
+  const float = type==='balloon' ? -1 : 1;              // 氣球往上飄
+  item = {type, float, x:mouse.x, y:mouse.y, ox:mouse.x, oy:mouse.y, len:4};
+}
+function itemCenter(){
+  const im = IMG[item.type], h = ITEM_W*im.height/im.width;
+  // 繫繩點：蘋果、蟲在頂端；氣球在底部的結
+  return item.float>0 ? {x:item.x, y:item.y + h*.45} : {x:item.x, y:item.y - h*.62};
+}
+function updateItem(){
+  if(!hangOn()){ item=null; return; }
+  if(!item){ if(--itemCd<=0) spawnItem(); return; }
+  if(item.len < STRING) item.len += 1.5;
+  const vx=(item.x-item.ox)*.985, vy=(item.y-item.oy)*.985;
+  item.ox=item.x; item.oy=item.y; item.x+=vx; item.y+=vy + .45*item.float;
+  const dx=item.x-mouse.x, dy=item.y-mouse.y, d=Math.hypot(dx,dy)||1;
+  if(d>item.len){ item.x=mouse.x+dx/d*item.len; item.y=mouse.y+dy/d*item.len; }
+}
+function hitItem(a){
+  if(!item || !hangOn()) return false;
+  const c = itemCenter(); if(Math.hypot(a.x-c.x, a.y-c.y) > 24) return false;
+  score++; document.getElementById('score').textContent = '擊落 '+score;
+  if(item.type==='balloon') fx.push({kind:'pop', x:c.x, y:c.y, life:22});
+  else fallen.push({type:item.type+'_hit', x:c.x, y:c.y, vx:a.vx*.35, vy:a.vy*.35-3, rot:0, vr:(a.vx>0?.12:-.12), life:200, bounced:false});
+  log(`命中 ${item.type}！擊落 ${score}`);
+  item = null; itemCd = 22; return true;
+}
+
+/* ================= 更新 ================= */
+function update(dt){
+  st.t++; if(st.mode==='ok') st.celT += dt;
+  if(st.dodge>0) st.dodge--; if(st.poke>0) st.poke--;
+  const now = performance.now();
+
+  pips.forEach((p,i)=>{
+    const r = rig(p);
+    p.phase += .085 * r.speed * (i ? 1.07 : 1);
+    if(st.mode==='think') p.draw = Math.min(.85, p.draw + .008*st.stamina);
+    if(st.mode==='wait') p.draw = Math.min(1, p.draw + .05);
+    if(st.mode==='exec' && st.tool!=='Read'){
+      p.draw += .22*st.stamina + i*.015;
+      if(p.draw>=1){ fire(r, true); p.draw = .15 + Math.random()*.2; }
+    }
+  });
+  if(st.mode==='away' && st.t%60===0){ const r=rig(pips[0]); fx.push({kind:'z', x:r.cx+20*r.dir, y:GY-190, life:90}); }
+  if(st.mode==='idle' && now-mouse.last>5000 && !hovering){ fire(rig(pips[0]), false); mouse.last = now; log('等太久了，咻——'); }
+  if((st.mode==='ok'||st.mode==='err') && st.t>150) setMode('idle');
+
+  for(let i=arrows.length-1;i>=0;i--){ const a = arrows[i];
+    if(a.stuck){ if(--a.stuck<=0) arrows.splice(i,1); continue; }
+    if(a.back){ const P = grip(rig(a.home)), d = norm(P.x-a.x, P.y-a.y);
+      a.x += d.x*16; a.y += d.y*16; a.rot = Math.atan2(-d.y,-d.x);
+      if(Math.hypot(P.x-a.x,P.y-a.y)<18) arrows.splice(i,1); continue; }
+    a.x+=a.vx; a.y+=a.vy; a.vy+=GRAV; a.trav+=Math.hypot(a.vx,a.vy); a.rot=Math.atan2(a.vy,a.vx);
+    if(a.tool==='Edit' && st.t%2===0) a.trail.push({x:a.x,y:a.y,life:90});
+    if(hitItem(a)){ arrows.splice(i,1); continue; }
+    if(a.tool==='WebSearch'){ if(a.x<0||a.x>W||a.y<0||a.y>GY) a.back=true; continue; }
+    if(a.x<-80||a.x>W+80){ arrows.splice(i,1); continue; }
+    if(a.y>=GY){ a.y=GY; a.stuck = a.frenzy ? 70 : 160; continue; }
+    if(!a.frenzy && a.trav>=a.dist){ a.stuck = 160; }   // 單發：插在游標當時的位置
+  }
+  updateItem();
+  for(let i=fallen.length-1;i>=0;i--){ const f=fallen[i];
+    if(f.y < GY-22){ f.x+=f.vx; f.y+=f.vy; f.vy+=GRAV; f.rot+=f.vr; }
+    else if(!f.bounced && f.vy>3){ f.y=GY-22; f.vy=-f.vy*.35; f.vx*=.5; f.vr*=.5; f.bounced=true; }
+    else { f.y=GY-22; f.vx=f.vy=0; f.vr=0; }
+    if(--f.life<=0) fallen.splice(i,1); }
+  for(let i=fx.length-1;i>=0;i--){ const e=fx[i];
+    if(e.kind==='stick'){ e.x+=e.vx; e.y+=e.vy; e.vy+=GRAV; e.rot+=e.vr; }
+    if(e.kind==='z'){ e.x+=.4; e.y-=.7; }
+    if(--e.life<=0) fx.splice(i,1); }
+
+  const r0 = rig(pips[0]);
+  const wasHover = hovering;
+  hovering = pips.some(p=>{ const r=rig(p); return Math.abs(mouse.x-r.cx)<48*r.s && mouse.y>GY-230*r.s && mouse.y<GY; });
+  document.body.style.cursor = hovering ? 'pointer' : 'default';
+  // 桌面模式：游標在 Pip 身上才接收點擊，其餘時間整個視窗穿透
+  if(TAURI && hovering !== wasHover) TAURI.core.invoke('set_through', {through: !hovering});
+}
+
+/* ================= 畫面 ================= */
+function render(){
+  ctx.setTransform(DPR,0,0,DPR,0,0); ctx.clearRect(0,0,W,H);
+  if(!TAURI){ ctx.fillStyle='#101820'; ctx.fillRect(0,GY,W,H-GY); }   // 假工作列（桌面模式用真的）
+  // Edit 的墨跡
+  ctx.fillStyle='#2e5fa8';
+  arrows.forEach(a=>a.trail.forEach(p=>{ if(p.life-->0){ ctx.globalAlpha=Math.min(1,p.life/40); ctx.beginPath(); ctx.arc(p.x,p.y,2.2,0,7); ctx.fill(); } }));
+  ctx.globalAlpha=1;
+
+  [...pips].reverse().forEach(p=>drawPip(rig(p)));
+
+  arrows.forEach(a=>{
+    if(a.tool==='WebSearch'){ const P=grip(rig(a.home)); ctx.strokeStyle='#d8c79a'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(P.x,P.y); ctx.lineTo(a.x,a.y); ctx.stroke(); }
+    const fade = a.stuck && a.stuck<40 ? a.stuck/40 : 1;
+    img(IMG.arrow, a.x, a.y, 60, a.rot, .92, .5, fade);       // 錨點在箭頭
+  });
+  fallen.forEach(f=> img(IMG[f.type], f.x, f.y, 56, f.rot, .5, .5, f.life<50 ? f.life/50 : 1));
+  if(item && hangOn()){
+    const c = itemCenter(), im = IMG[item.type];
+    ctx.strokeStyle='#e8e8e8'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(mouse.x,mouse.y); ctx.lineTo(item.x,item.y); ctx.stroke();
+    const sway = Math.atan2(item.x-mouse.x, Math.abs(item.y-mouse.y)+1)*.6*item.float;
+    img(im, c.x, c.y, ITEM_W, sway);
+  }
+  fx.forEach(e=>{
+    if(e.kind==='pop') img(IMG.pop, e.x, e.y, 54, 0, .5, .5, e.life/22);
+    if(e.kind==='stick') img(IMG.arrow, e.x, e.y, 34, e.rot, .5, .5, e.life/60);
+    if(e.kind==='z'){ ctx.font='900 22px "Arial Black",system-ui'; ctx.fillStyle=`rgba(230,240,255,${e.life/90})`; ctx.fillText('z', e.x, e.y); }
+  });
+}
+
+let lastT = performance.now();
+function loop(now){ const dt = Math.min(50, now-lastT); lastT = now; update(dt); render(); requestAnimationFrame(loop); }
+
+/* ================= 輸入 ================= */
+function pointer(x, y){
+  const now = performance.now();
+  if(x===mouse.x && y===mouse.y) return;                // Rust 每 30ms 推一次，沒動就不算
+  if(mouse.rt){ const sp = Math.hypot(x-mouse.rx, y-mouse.ry)/Math.max(1, now-mouse.rt);
+    if(sp>4 && st.mode!=='away' && st.dodge===0){ st.dodge = 32; log('嚇！（游標甩太快）'); } }
+  mouse.rx=x; mouse.ry=y; mouse.rt=now; mouse.x=x; mouse.y=y; mouse.last=now;
+}
+addEventListener('mousemove', e=>pointer(e.clientX, e.clientY));
+if(TAURI){
+  // 穿透時收不到 mousemove，改吃 Rust 推來的全域游標位置
+  TAURI.event.listen('cursor', e=>pointer(e.payload.x, e.payload.y));
+  // Claude 狀態（之後由 Mod 打 http://127.0.0.1:38917/state?mode=...&tool=...）
+  TAURI.event.listen('state', e=>{
+    const q = e.payload;
+    if(q.tool && ['Bash','Edit','Read','WebSearch'].includes(q.tool)){ st.tool = q.tool; document.getElementById('tool').value = q.tool; }
+    if(q.arrows!==undefined){ st.arrows = Math.max(0, Math.min(20, +q.arrows)); syncCtx(); }
+    if(q.stamina!==undefined){ st.stamina = Math.max(.1, Math.min(1, +q.stamina)); }
+    if(q.sub==='+' && pips.length<4) pips.push({off:95*pips.length, s:.7, draw:0, phase:Math.random()*6});
+    if(q.sub==='-' && pips.length>1) pips.pop();
+    if(q.mode && MODES.some(m=>m[0]===q.mode)) setMode(q.mode);
+  });
+}
+addEventListener('click', e=>{ if(e.target.closest('#hud') || !hovering) return; st.poke = 24; log('摸摸頭 ♥'); });
+addEventListener('keydown', e=>{ const i=+e.key-1; if(MODES[i]) setMode(MODES[i][0]); });
+const modesEl = document.getElementById('modes');
+MODES.forEach(([m,label])=>{ const b=document.createElement('button'); b.textContent=label; b.dataset.m=m; b.onclick=()=>setMode(m); modesEl.appendChild(b); });
+document.getElementById('tool').onchange = e=>{ st.tool = e.target.value; };
+const ctxEl=document.getElementById('ctx'), staEl=document.getElementById('sta');
+function syncCtx(){ ctxEl.value=st.arrows; document.getElementById('ctxv').textContent=st.arrows; }
+ctxEl.oninput=()=>{ st.arrows=+ctxEl.value; syncCtx(); };
+staEl.oninput=()=>{ st.stamina=staEl.value/100; document.getElementById('stav').textContent=staEl.value+'%'; };
+document.getElementById('compact').onclick=()=>{ st.arrows=20; syncCtx(); log('session.compact → 箭袋補滿'); };
+document.getElementById('sub').onclick=()=>{ if(pips.length<4){ pips.push({off:95*pips.length, s:.7, draw:0, phase:Math.random()*6}); log('agent.spawn → 小 Pip 加入'); } };
+document.getElementById('subEnd').onclick=()=>{ if(pips.length>1){ pips.pop(); log('子代理完成 → 小 Pip 離開'); } };
+
+loadAll().then(()=>{ setMode('idle'); requestAnimationFrame(loop); })
+         .catch(p=>log('素材載入失敗：'+p+'（要用本機伺服器開，不能直接開檔案）'));
+</script>
+</body>
+</html>

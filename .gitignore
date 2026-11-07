@@ -1,0 +1,10 @@
+# build outputs
+pet/src-tauri/target/
+pet/src-tauri/gen/
+pet/node_modules/
+pet/dist/
+mod/*/.claude-plugin/types/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
