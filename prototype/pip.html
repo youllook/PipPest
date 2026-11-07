@@ -347,7 +347,6 @@ function update(dt){
       a.x += d.x*16; a.y += d.y*16; a.rot = Math.atan2(-d.y,-d.x);
       if(Math.hypot(P.x-a.x,P.y-a.y)<18) arrows.splice(i,1); continue; }
     a.x+=a.vx; a.y+=a.vy; a.vy+=GRAV; a.trav+=Math.hypot(a.vx,a.vy); a.rot=Math.atan2(a.vy,a.vx);
-    if(a.tool==='Edit' && st.t%2===0) a.trail.push({x:a.x,y:a.y,life:90});
     if(hitItem(a)){ arrows.splice(i,1); continue; }
     if(a.tool==='WebSearch'){ if(a.x<0||a.x>W||a.y<0||a.y>GY) a.back=true; continue; }
     if(a.x<-80||a.x>W+80){ arrows.splice(i,1); continue; }
@@ -377,15 +376,10 @@ function update(dt){
 function render(){
   ctx.setTransform(DPR,0,0,DPR,0,0); ctx.clearRect(0,0,W,H);
   if(!TAURI){ ctx.fillStyle='#101820'; ctx.fillRect(0,GY,W,H-GY); }   // 假工作列（桌面模式用真的）
-  // Edit 的墨跡
-  ctx.fillStyle='#2e5fa8';
-  arrows.forEach(a=>a.trail.forEach(p=>{ if(p.life-->0){ ctx.globalAlpha=Math.min(1,p.life/40); ctx.beginPath(); ctx.arc(p.x,p.y,2.2,0,7); ctx.fill(); } }));
-  ctx.globalAlpha=1;
 
   [...pips].reverse().forEach(p=>drawPip(rig(p)));
 
   arrows.forEach(a=>{
-    if(a.tool==='WebSearch'){ const P=grip(rig(a.home)); ctx.strokeStyle='#d8c79a'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(P.x,P.y); ctx.lineTo(a.x,a.y); ctx.stroke(); }
     const fade = a.stuck && a.stuck<40 ? a.stuck/40 : 1;
     img(IMG.arrow, a.x, a.y, 60, a.rot, .92, .5, fade);       // 錨點在箭頭
   });
