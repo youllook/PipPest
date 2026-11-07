@@ -6,7 +6,7 @@
 >
 > *A desktop pet that gets in the way of your work. Productivity −150%. Distraction 200%.*
 
-![Pip](assets/contact.png)
+![Pip 在 Claude Code 忙碌時對游標狂射箭，最後握拳慶祝](docs/demo.gif)
 
 Pip 是一隻站在你工作列上的橡皮水管弓箭手。Claude Code 在幫你寫程式的時候，Pip 在對你的游標射箭。
 
